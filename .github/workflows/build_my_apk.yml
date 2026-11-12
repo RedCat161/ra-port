@@ -1,10 +1,13 @@
 name: Build Red Alert APK
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       custom_mix_zip_url:
-        description: 'Необязательно: прямая ссылка на свой ZIP с полными файлами .MIX (оставь пустым для автозагрузки базовых файлов)'
+        description: 'Необязательно: прямая ссылка на ZIP с файлами .MIX (если пусто — берется из репозитория/Releases GitHub)'
         required: false
         default: ''
 
@@ -14,6 +17,8 @@ jobs:
     steps:
       - name: Скачивание кода порта
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Установка Java 17
         uses: actions/setup-java@v4
@@ -21,35 +26,55 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      -       - name: Автоматическая загрузка файлов .MIX и подготовка папки assets/redalert
+      - name: Автоматическая загрузка файлов .MIX (CD1 Allies и CD2 Soviet)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/ra_assets/extracted
           mkdir -p assets/redalert/allies/INSTALL
           mkdir -p assets/redalert/soviet/INSTALL
           mkdir -p assets/redalert/INSTALL
 
+          REPO_ZIP=$(find . -maxdepth 3 -type f -iname "*.zip" ! -path "./.git/*" | head -n 1)
+
           if [ -n "${{ inputs.custom_mix_zip_url }}" ]; then
-            echo "Скачиваем полный пользовательский архив с видео и музыкой..."
+            echo "Скачиваем архив по указанной ссылке..."
             curl -L "${{ inputs.custom_mix_zip_url }}" -o /tmp/ra_assets/game.zip
+            unzip -o /tmp/ra_assets/game.zip -d /tmp/ra_assets/extracted
+          elif [ -n "$REPO_ZIP" ]; then
+            echo "Найден архив прямо в репозитории: $REPO_ZIP"
+            unzip -o "$REPO_ZIP" -d /tmp/ra_assets/extracted
+          elif gh release download --repo "${{ github.repository }}" --pattern "*.zip" --dir /tmp/ra_assets --clobber 2>/dev/null; then
+            RELEASE_ZIP=$(find /tmp/ra_assets -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+            echo "Скачан архив из GitHub Releases: $RELEASE_ZIP"
+            unzip -o "$RELEASE_ZIP" -d /tmp/ra_assets/extracted
+          elif [ -d "ra_full" ]; then
+            echo "Найдена папка ra_full в репозитории..."
+            cp -r ra_full /tmp/ra_assets/extracted/
           else
             echo "Получаем ссылку на базовые файлы Red Alert с зеркала OpenRA..."
             MIRROR_URL=$(curl -sL https://www.openra.net/packages/ra-quickinstall-mirrors.txt | head -n 1 | tr -d '\r')
             curl -L "$MIRROR_URL" -o /tmp/ra_assets/game.zip
+            unzip -o /tmp/ra_assets/game.zip -d /tmp/ra_assets/extracted
           fi
 
-          unzip -o /tmp/ra_assets/game.zip -d /tmp/ra_assets/extracted
+          # Ищем папки allies (CD1) и soviet (CD2) на любой глубине (включая внутри ra_full/)
+          ALLIES_DIR=$(find /tmp/ra_assets/extracted -type d -iname "allies" | head -n 1)
+          SOVIET_DIR=$(find /tmp/ra_assets/extracted -type d -iname "soviet" | head -n 1)
 
-          if [ -d "/tmp/ra_assets/extracted/allies" ] && [ -d "/tmp/ra_assets/extracted/soviet" ]; then
-            find /tmp/ra_assets/extracted/allies -type f | while read -r f; do
+          if [ -n "$ALLIES_DIR" ] && [ -n "$SOVIET_DIR" ]; then
+            echo "Найдены папки обоих дисков: $ALLIES_DIR и $SOVIET_DIR"
+            find "$ALLIES_DIR" -type f | while read -r f; do
               up=$(basename "$f" | tr '[:lower:]' '[:upper:]')
               cp "$f" "assets/redalert/allies/$up"
               cp "$f" "assets/redalert/$up"
             done
-            find /tmp/ra_assets/extracted/soviet -type f | while read -r f; do
+            find "$SOVIET_DIR" -type f | while read -r f; do
               up=$(basename "$f" | tr '[:lower:]' '[:upper:]')
               cp "$f" "assets/redalert/soviet/$up"
             done
           else
+            echo "Папки allies/soviet не найдены, копируем общие файлы..."
             find /tmp/ra_assets/extracted -type f | while read -r f; do
               up=$(basename "$f" | tr '[:lower:]' '[:upper:]')
               cp "$f" "assets/redalert/$up"
@@ -65,16 +90,10 @@ jobs:
             fi
           done
 
-
-          # Создаем конфигурационный файл REDALERT.INI, если его не было в архиве
-          for dir in "assets/redalert" "assets/redalert/allies" "assets/redalert/soviet"; do
-            if [ ! -f "$dir/INSTALL/REDALERT.INI" ]; then
-              printf "[Intro]\nPlayIntro=no\n\n[Options]\nGameSpeed=3\nScrollRate=3\n" > "$dir/INSTALL/REDALERT.INI"
-              cp "$dir/INSTALL/REDALERT.INI" "$dir/REDALERT.INI"
-            fi
-          done
-
+          echo "Содержимое диска Allies (CD1):"
           ls -lh assets/redalert/allies/
+          echo "Содержимое диска Soviet (CD2):"
+          ls -lh assets/redalert/soviet/
 
       - name: Установка Android SDK и NDK 28.2.13676358
         run: |
