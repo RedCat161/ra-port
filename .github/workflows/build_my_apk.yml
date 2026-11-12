@@ -1,4 +1,27 @@
-      - name: Автоматическая загрузка файлов .MIX и подготовка папки assets/redalert
+name: Build Red Alert APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      custom_mix_zip_url:
+        description: 'Необязательно: прямая ссылка на свой ZIP с полными файлами .MIX (оставь пустым для автозагрузки базовых файлов)'
+        required: false
+        default: ''
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Скачивание кода порта
+        uses: actions/checkout@v4
+
+      - name: Установка Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      -       - name: Автоматическая загрузка файлов .MIX и подготовка папки assets/redalert
         run: |
           mkdir -p /tmp/ra_assets/extracted
           mkdir -p assets/redalert/allies/INSTALL
@@ -41,3 +64,30 @@
               cp "$dir/INSTALL/REDALERT.INI" "$dir/REDALERT.INI"
             fi
           done
+
+
+          # Создаем конфигурационный файл REDALERT.INI, если его не было в архиве
+          for dir in "assets/redalert" "assets/redalert/allies" "assets/redalert/soviet"; do
+            if [ ! -f "$dir/INSTALL/REDALERT.INI" ]; then
+              printf "[Intro]\nPlayIntro=no\n\n[Options]\nGameSpeed=3\nScrollRate=3\n" > "$dir/INSTALL/REDALERT.INI"
+              cp "$dir/INSTALL/REDALERT.INI" "$dir/REDALERT.INI"
+            fi
+          done
+
+          ls -lh assets/redalert/allies/
+
+      - name: Установка Android SDK и NDK 28.2.13676358
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+
+      - name: Сборка Android APK
+        run: |
+          chmod +x scripts/build_android_debug.sh
+          ./scripts/build_android_debug.sh
+
+      - name: Выгрузка готового APK для скачивания на телефон
+        uses: actions/upload-artifact@v4
+        with:
+          name: RedAlert-Android-APK
+          path: android/app/build/outputs/apk/debug/*.apk
